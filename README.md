@@ -38,27 +38,7 @@ sudo dhclient wlan0
 
 Configure static IP for easier SSH access:
 
-```bash
-# Edit network configuration
-sudo nano /etc/dhcpcd.conf
-
-# Add these lines at the end:
-interface eth0
-static ip_address=192.168.1.100/24
-static routers=192.168.1.1
-static domain_name_servers=8.8.8.8 8.8.4.4
-
-# For WiFi interface (if using WiFi)
-interface wlan0
-static ip_address=192.168.1.100/24
-static routers=192.168.1.1
-static domain_name_servers=8.8.8.8 8.8.4.4
-
-# Restart networking service
-sudo systemctl restart dhcpcd
-```
-
-Alternative method using `/etc/network/interfaces`:
+using `/etc/network/interfaces`:
 
 ```bash
 sudo nano /etc/network/interfaces
