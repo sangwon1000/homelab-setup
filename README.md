@@ -7,9 +7,10 @@ This documentation serves as a comprehensive guide for setting up and managing a
 1. [Initial Debian Setup](#initial-debian-setup)
 2. [Network Configuration](#network-configuration)
 3. [SSH Access Setup](#ssh-access-setup)
-4. [Docker and Harbor Registry](#docker-and-harbor-registry)
-5. [Nginx with HTTPS](#nginx-with-https)
-6. [System Maintenance](#system-maintenance)
+4. [Advanced SSH Setup: Secure Remote Access via DuckDNS (LAN + WAN)](#️-advanced-ssh-setup-secure-remote-access-via-duckdns-lan--wan)
+5. [Docker and Harbor Registry](#docker-and-harbor-registry)
+6. [Nginx with HTTPS](#nginx-with-https)
+7. [System Maintenance](#system-maintenance)
 
 ## Initial Debian Setup
 
@@ -110,6 +111,193 @@ Now you can SSH into your homelab with simply:
 ```bash
 ssh homelab
 ```
+
+## 🛠️ Advanced SSH Setup: Secure Remote Access via DuckDNS (LAN + WAN)
+
+This section covers setting up secure SSH access both locally and remotely using DuckDNS for dynamic DNS.
+
+### 🧱 Step 1: Set a Static IP for Debian
+
+using `/etc/network/interfaces`:
+
+```bash
+sudo nano /etc/network/interfaces
+
+# Add configuration (example for WiFi):
+allow-hotplug wlp2s0
+iface wlp2s0 inet static
+    address 192.168.1.XXX
+    netmask 255.255.255.0
+    gateway 192.168.1.1
+    wpa-ssid YOUR_WIFI_SSID
+    wpa-psk YOUR_WIFI_PASSWORD
+    dns-nameservers 1.1.1.1 8.8.8.8
+
+# Restart networking
+sudo systemctl restart networking
+```
+
+**Purpose:** Ensures the Debian machine always has the same IP address on your local network, required for reliable port forwarding.
+
+### 🔐 Step 2: Install and Start the SSH Server
+
+```bash
+sudo apt update
+sudo apt install openssh-server
+sudo systemctl enable ssh
+sudo systemctl start ssh
+```
+
+**Purpose:** Enables remote access to the Debian machine via SSH.
+
+### 🌍 Step 3: Register a DuckDNS Subdomain
+
+1. Visit: https://www.duckdns.org
+2. Sign in with GitHub/Google
+3. Create a domain: `your-domain.duckdns.org`
+4. Copy your personal token
+
+### 📝 Step 4: Set Up DuckDNS Update Script
+
+```bash
+# Create DuckDNS directory
+mkdir ~/duckdns
+nano ~/duckdns/duck.sh
+```
+
+Script content:
+```bash
+echo url="https://www.duckdns.org/update?domains=your-domain&token=YOUR_TOKEN&ip=" | curl -k -o ~/duckdns/duck.log -K -
+```
+
+Make it executable and install dependencies:
+```bash
+chmod 700 ~/duckdns/duck.sh
+sudo apt install curl
+```
+
+Test the script:
+```bash
+bash ~/duckdns/duck.sh
+cat ~/duckdns/duck.log  # should return "OK"
+```
+
+### ⏰ Step 5: Schedule Auto-IP Updates with Cron
+
+```bash
+crontab -e
+
+# Add this line to update every 5 minutes:
+*/5 * * * * ~/duckdns/duck.sh >/dev/null 2>&1
+```
+
+**Purpose:** Keeps your DuckDNS domain updated with your current public IP every 5 minutes.
+
+### 🔀 Step 6: Set Up Router Port Forwarding
+
+Configure your router with these settings:
+
+| Setting | Value |
+|---------|-------|
+| External Port | 2222 |
+| Internal IP | 192.168.1.XXX |
+| Internal Port | 22 |
+| Protocol | TCP |
+
+**Purpose:** Allows access to your Debian machine's SSH server from outside your home network via port 2222.
+
+### 🔑 Step 7: Generate and Install SSH Key
+
+On your Mac:
+```bash
+ssh-keygen -t ed25519 -C "your-email@example.com"
+```
+
+Install the key on Debian via DuckDNS:
+```bash
+ssh-copy-id -p 2222 your-username@your-domain.duckdns.org
+```
+
+### 🔧 Step 8: Disable Password Authentication in SSH
+
+```bash
+sudo nano /etc/ssh/sshd_config
+
+# Add or modify this line:
+PasswordAuthentication no
+
+# Restart SSH
+sudo systemctl restart ssh
+```
+
+**Purpose:** Prevents all password-based SSH logins (only SSH key holders can connect).
+
+### 🚫 Step 9: Disable Root Login
+
+In the same SSH config file:
+```bash
+# Add or modify this line:
+PermitRootLogin no
+
+# Restart SSH again
+sudo systemctl restart ssh
+```
+
+**Purpose:** Prevents direct SSH login as root for security reasons. Use sudo from a regular user instead.
+
+### 🧠 Step 10: Configure SSH Shortcuts on Mac
+
+```bash
+nano ~/.ssh/config
+
+# Add this configuration block:
+Host homelab-local
+    HostName 192.168.1.XXX
+    User your-username
+    Port 22
+    IdentityFile ~/.ssh/id_ed25519
+
+Host homelab-remote
+    HostName your-domain.duckdns.org
+    User your-username
+    Port 2222
+    IdentityFile ~/.ssh/id_ed25519
+```
+
+Now you can connect:
+- **On LAN:** `ssh homelab-local`
+- **On WAN (from anywhere):** `ssh homelab-remote`
+
+### Security Best Practices
+
+1. **Change Default SSH Port** (optional):
+   ```bash
+   sudo nano /etc/ssh/sshd_config
+   # Change: Port 22 to Port XXXX
+   sudo systemctl restart ssh
+   ```
+
+2. **Enable UFW Firewall**:
+   ```bash
+   sudo ufw enable
+   sudo ufw allow ssh
+   sudo ufw allow 2222/tcp  # for remote access
+   ```
+
+3. **Monitor SSH Access**:
+   ```bash
+   # Check recent SSH logins
+   sudo journalctl -u ssh -f
+   
+   # Check failed login attempts
+   sudo grep "Failed password" /var/log/auth.log
+   ```
+
+4. **Backup SSH Keys**:
+   ```bash
+   # Backup your SSH keys securely
+   cp ~/.ssh/id_ed25519* ~/secure-backup-location/
+   ```
 
 ## Docker and Harbor Registry
 
