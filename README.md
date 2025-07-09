@@ -361,6 +361,210 @@ data_volume: /data
 sudo ./install.sh
 ```
 
+### Securing Harbor Behind Host-Level Nginx
+
+This section covers configuring Harbor to run securely behind your host's Nginx proxy instead of exposing Harbor's internal proxy directly.
+
+#### Step 1: Rebind Harbor's Internal Proxy to Localhost
+
+Edit Harbor's docker-compose.yml to limit proxy access to localhost only:
+
+```bash
+cd ~/harbor
+nano docker-compose.yml
+
+# Find the proxy service and change ports from:
+# ports:
+#   - "80:8080"
+#   - "443:8443"
+# To:
+ports:
+  - "127.0.0.1:8080:8080"
+  - "127.0.0.1:8443:8443"
+```
+
+**Purpose:** Limits Harbor's built-in Nginx to the loopback interface so it can't be reached directly from the network, only via your host Nginx.
+
+#### Step 2: Restart Harbor Cleanly
+
+```bash
+# Stop Harbor and remove orphan containers
+sudo docker-compose down --remove-orphans
+
+# Start Harbor with new configuration
+sudo docker-compose up -d
+
+# Verify no containers are binding to 0.0.0.0
+docker ps | grep proxy
+```
+
+#### Step 3: Install and Configure Host Nginx
+
+```bash
+# Install Nginx on the host system
+sudo apt install nginx
+
+# Test Nginx configuration
+sudo nginx -t
+```
+
+#### Step 4: Create Harbor Nginx Configuration
+
+```bash
+# Create Harbor site configuration
+sudo nano /etc/nginx/sites-available/harbor
+
+# Add initial HTTP-only configuration:
+server {
+    listen 80;
+    server_name your-domain.duckdns.org;
+    
+    # Disable any limits for Harbor
+    client_max_body_size 0;
+    chunked_transfer_encoding on;
+    
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_request_buffering off;
+    }
+}
+
+# Enable the site
+sudo ln -s /etc/nginx/sites-available/harbor /etc/nginx/sites-enabled/
+sudo nginx -t
+```
+
+#### Step 5: Obtain Let's Encrypt Certificate
+
+```bash
+# Stop Nginx temporarily for standalone certificate generation
+sudo systemctl stop nginx
+
+# Generate certificate using standalone mode
+sudo certbot certonly --standalone -d your-domain.duckdns.org
+
+# Certificate files will be stored in:
+# /etc/letsencrypt/live/your-domain.duckdns.org/fullchain.pem
+# /etc/letsencrypt/live/your-domain.duckdns.org/privkey.pem
+```
+
+#### Step 6: Enable HTTPS in Nginx
+
+```bash
+# Update Harbor Nginx configuration with HTTPS
+sudo nano /etc/nginx/sites-available/harbor
+
+# Replace with full HTTPS configuration:
+server {
+    listen 80;
+    server_name your-domain.duckdns.org;
+    return 301 https://$server_name$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name your-domain.duckdns.org;
+
+    # SSL Configuration
+    ssl_certificate     /etc/letsencrypt/live/your-domain.duckdns.org/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/your-domain.duckdns.org/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384;
+    ssl_prefer_server_ciphers off;
+
+    # Security headers
+    add_header X-Frame-Options DENY;
+    add_header X-Content-Type-Options nosniff;
+    add_header X-XSS-Protection "1; mode=block";
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+    # Harbor-specific settings
+    client_max_body_size 0;
+    chunked_transfer_encoding on;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_request_buffering off;
+    }
+}
+
+# Test and start Nginx
+sudo nginx -t
+sudo systemctl start nginx
+```
+
+#### Step 7: Clean Up Any Conflicting Nginx Processes
+
+```bash
+# Stop any manually launched Nginx workers
+sudo nginx -s quit || true
+sudo pkill nginx
+
+# Start Nginx properly via systemctl
+sudo systemctl start nginx
+sudo systemctl enable nginx
+```
+
+#### Step 8: Verify Local Proxy Functionality
+
+```bash
+# Test HTTP proxy
+curl -I http://127.0.0.1/
+
+# Test HTTPS proxy
+curl -Ik https://127.0.0.1/
+
+# Both should return HTTP 200, confirming Nginx → Harbor is working
+```
+
+#### Step 9: Configure Router Port Forwarding
+
+Set up port forwarding in your router:
+
+| Service | External Port | Internal IP | Internal Port | Protocol |
+|---------|---------------|-------------|---------------|----------|
+| HTTP | 80 | 192.168.1.XXX | 80 | TCP |
+| HTTPS | 443 | 192.168.1.XXX | 443 | TCP |
+
+#### Step 10: Verify External Access
+
+```bash
+# Test external connectivity
+nc -vz your-domain.duckdns.org 80
+nc -vz your-domain.duckdns.org 443
+
+# Both commands should succeed
+```
+
+Now Harbor should be accessible securely via:
+- **Local:** `https://your-domain.duckdns.org`
+- **External:** `https://your-domain.duckdns.org`
+
+#### Certificate Renewal
+
+Set up automatic certificate renewal:
+
+```bash
+# Test renewal
+sudo certbot renew --dry-run
+
+# Add to crontab for automatic renewal
+sudo crontab -e
+
+# Add this line to renew certificates twice daily:
+0 12 * * * /usr/bin/certbot renew --quiet --reload-nginx
+```
+
 ## Nginx with HTTPS
 
 ### Nginx Installation and Configuration
